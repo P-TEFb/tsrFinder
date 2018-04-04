@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+
+#-----------------------------------------------------------------------------
+# Created by Kyle Nilson 2017-10-13
+#-----------------------------------------------------------------------------
+
+lastUpdate="2018-01-24 by Kyle Nilson."
+
+tsrSize=20
+minReads=20
+avgReadLength=30
+maxReadLength=600
+bufferUpstream=0
+bufferDownstream=0
+threads=8
+memorySize=1G
+
+about="
+This script identifies transcription start regions (TSRs) from PRO-Cap data.
+This script accepts mapped sequencing reads in BED format and requires a 
+  chrom.sizes file (obtainable using the fetchChromSizes utility).
+Every possible TSR window is evaluated for the sum of 5' reads (TSS) and the 
+  average read length. TSRs are then sorted by total reads and are kept only 
+  if they don't overlap with any better-scoring window. For every TSR, this 
+  script also calculates the position and read depth of the maximum TSS, and  
+  the position and standard deviation of the average TSS.
+TSR information is output in BED/BB and BedGraph/BW format for use with UCSC
+  Genome Browser or utilities such as bedTools or deepTools. A comprehensive 
+  Tab file is also provided for manual extraction of data.
+"
+
+usage="
+tsrFinder -i <mapped-fragments.bed> -c <###.chrom.sizes> [options]
+-n <int>        max length of fragment to consider [default $maxReadLength nt]
+-s <int>	TSR window size [default $tsrSize bp]
+-u <int>	buffer zone upstream of each TSR [default $bufferUpstream bp]
+-w <int>	buffer zone downstream of each TSR [default $bufferDownstream bp]
+-d <int>	minimum sequencing depth per TSR [default $minReads reads]
+-a <int>	minimum average transcript length per TSR [default $avgReadLength nt]
+-t <int>        number of CPU threads [default $threads]
+-m <size>       size of memory buffer per thread [default $memorySize]
+"
+
+while getopts "i:c:n:s:u:w:d:a:t:m:" opt; do
+	case $opt in
+		i) inputBed=$OPTARG;;
+		c) chromSizes=$OPTARG;;
+		n) maxReadLength=$OPTARG;;
+		s) tsrSize=$OPTARG;;
+		u) bufferUpstream=$OPTARG;;
+		w) bufferDownstream=$OPTARG;;
+		d) minReads=$OPTARG;;
+		a) avgReadLength=$OPTARG;;
+		t) threads=$OPTARG;;
+                m) memorySize=$OPTARG;;
+	esac
+done
+
+if [[ -z "$inputBed" ]] || [[ -z "$chromSizes" ]]; then
+	printf "
+Usage: $usage
+About: $about
+Last updated: $lastUpdate
+"
+	exit
+fi
+
+
+if [ $minReads == 0 ]; then
+        printf "
+The minimum sequencing depth per TSR (-d) must not be zero.
+Please set -d to be 3 or greater.
+
+"
+        exit
+fi
+
+printf "
+Last updated: $lastUpdate
+
+Using the following parameters:
+
+PRO-Cap BED file:		$inputBed
+Chromosome size file:		$chromSizes
+Maximum fragment length to use:	$maxReadLength nt
+TSR window size:		$tsrSize bp
+Upstream buffer size:		$bufferUpstream bp
+Downstream buffer size:		$bufferDownstream bp
+Minimum depth per TSR:		$minReads reads
+Minimum avg TSR read length:	$avgReadLength nt
+Number of CPU threads:		$threads
+Amount of RAM per thread:	$memorySize
+"
+
+if command -v bedToBigBed &> /dev/null && command -v bedGraphToBigWig &> /dev/null; then
+	printf "
+Output will also be provided in bigBed and bigWig formats.
+"
+else
+	printf "
+Because bedToBigBed and bedGraphToBigWig are not installed, 
+  bigBed and bigWig output will not be provided.
+"
+fi
+
+prefix=${inputBed%.bed}
+tmpDir=$(mktemp -d $prefix"_XXXXXXXXXX")
+
+#	Because I spawn child processes, I need a way to kill them if the parent dies.
+#	The first works for bash. The second is a more comprehensive failsafe.
+
+trap "kill 0" EXIT
+trap "exit" INT TERM ERR
+
+
+#	1: Split input BED by chromosome and strand; report fragments <= $maxReadLength.
+
+cat $inputBed | awk -v awk_tmpDir=$tmpDir -v awk_maxReadLength=$maxReadLength '$3-$2 <= awk_maxReadLength {if ($6 == "+") {print > awk_tmpDir"/"$1"-FW.1"} else {print > awk_tmpDir"/"$1"-RV.1"}}'
+
+
+#	2: Collapse fragments with the same TSS.
+#	Note:	The 1 bp stranded difference in TSS position is corrected here; no need to recompensate later.
+#	Out:	chr; tssLeft; tssRight; tssLenSum; tssSum; str
+
+for fileFW1 in $tmpDir/*-FW.1; do
+	cat $fileFW1 | sort --parallel $threads --buffer-size=$memorySize -n -k2,2 -k3,3 | awk 'NR == 1 {tssPos = int($2); tssSum = 1; tssLenSum = int($3-$2)} NR > 1 {if ($2 == tssPos) {tssSum++; tssLenSum += int($3-$2)} else {print $1 "\t" tssPos "\t" tssPos+1 "\t" tssLenSum "\t" tssSum "\t" "+"; tssPos = int($2); tssSum = 1; tssLenSum = int($3-$2)}}' > ${fileFW1%.1}".2" &
+done
+wait
+
+for fileRV1 in $tmpDir/*-RV.1; do
+	cat $fileRV1 | sort --parallel $threads --buffer-size=$memorySize -n -k3,3 -k2,2 | awk 'NR == 1 {tssPos = int($3); tssSum = 1; tssLenSum = int($3-$2)} NR > 1 {if ($3 == tssPos) {tssSum++; tssLenSum += int($3-$2)} else {print $1 "\t" tssPos-1 "\t" tssPos "\t" tssLenSum "\t" tssSum "\t" "-"; tssPos = int($3); tssSum = 1; tssLenSum = int($3-$2)}}' > ${fileRV1%.1}".2" &
+done
+wait
+
+
+#	3: Identify and report non-overlapping TSRs of $tsrSize that contain $minReads and fragment lengths >= $avgReadLength.
+#		Fill all genomic positions that lack TSS with zeros.
+#		For every $tsrSize window, report TSR read depth, weighted average TSS position, stdev of average TSS position, max TSS position, max TSS read depth.
+#		Shuffle TSRs, sort by read depth, and keep only non-overlapping buffered TSRs.
+#	Out:	chr; tsrL; tsrR; name; tsrReads; str; maxTSS-1; maxTSS; maxTSSReads; avgTSS; maxTSS-avgTSS; stdevAvgTSS
+
+for fileFW2 in $tmpDir/*-FW.2; do
+	cat $chromSizes $fileFW2 | awk 'BEGIN {x = 0} NF == 2 {chrLen[$1] = int($2)} NF == 6 {chrSize = chrLen[$1]; while (x < int(chrSize)) {if (x < int($2)) {print $1 "\t" x "\t" x+1 "\t" 0 "\t" 0 "\t" $6; x++} if (x == $2) {print $0; x++; next}}}' | awk -v awk_tsrSize=$tsrSize -v awk_minReads=$minReads -v awk_avgReadLength=$avgReadLength -v CONVFMT=%.15g '$3 < awk_tsrSize {sum[int($3)] = int($5); lenSum[int($3)] = int($4)} $3 >= awk_tsrSize {sum[int($3)] = int($5); lenSum[int($3)] = int($4); maxSum = 0; for (x = int($3-awk_tsrSize+1); x <= int($3); x++) {tsrSum = tsrSum + sum[int(x)]; tsrLenSum = tsrLenSum + lenSum[int(x)]; tsrSumPos = tsrSumPos + x*sum[int(x)]; if (maxSum < sum[int(x)]) {maxSum = sum[int(x)]; maxPos = int(x)}} if (tsrSum >= awk_minReads && tsrLenSum/tsrSum >= awk_avgReadLength) {avgPos = tsrSumPos/tsrSum; for (x = int($3-awk_tsrSize+1); x <= int($3); x++) {sumOfSquares = sumOfSquares + ((x-avgPos)^2)*sum[int(x)]} stdevAvgPos = sqrt(sumOfSquares/tsrSum); print $1 "\t" $3-awk_tsrSize "\t" $3 "\t" $1":"$3-awk_tsrSize"-"$3 "\t" tsrSum "\t" $6 "\t" maxPos-1 "\t" maxPos "\t" maxSum "\t" avgPos "\t" maxPos-avgPos "\t" stdevAvgPos } tsrSum = 0; tsrLenSum = 0; tsrSumPos = 0; avgPos = 0; sumOfSquares = 0; stdevAvgPos = 0; delete sum[int($3-awk_tsrSize+1)]}' | shuf | sort --parallel $threads --buffer-size=$memorySize -k5,5nr | awk -v awk_bufferUpstream=$bufferUpstream -v awk_bufferDownstream=$bufferDownstream 'NR == 1 {print $0; for (x = int($2+1-awk_bufferUpstream); x < int($3+awk_bufferDownstream); x++) {posArray[int(x)] = int(1)}} NR > 1 {if (int($2) in posArray) {next} if (int($3) in posArray) {next} else {print $0; for (x = int($2+1-awk_bufferUpstream); x < int($3+awk_bufferDownstream); x++) {posArray[int(x)] = int(1)}}}' | sort --parallel $threads --buffer-size=$memorySize -k2,2n > ${fileFW2%.2}".3" &
+done
+wait
+
+for fileRV2 in $tmpDir/*-RV.2; do
+	cat $chromSizes $fileRV2 | awk 'BEGIN {x = 0} NF == 2 {chrLen[$1] = int($2)} NF == 6 {chrSize = chrLen[$1]; while (x < int(chrSize)) {if (x < int($2)) {print $1 "\t" x "\t" x+1 "\t" 0 "\t" 0 "\t" $6; x++} if (x == $2) {print $0; x++; next}}}' | awk -v awk_tsrSize=$tsrSize -v awk_minReads=$minReads -v awk_avgReadLength=$avgReadLength -v CONVFMT=%.15g '$3 < awk_tsrSize {sum[int($3)] = int($5); lenSum[int($3)] = int($4)} $3 >= awk_tsrSize {sum[int($3)] = int($5); lenSum[int($3)] = int($4); maxSum = 0; for (x = int($3-awk_tsrSize+1); x <= int($3); x++) {tsrSum = tsrSum + sum[int(x)]; tsrLenSum = tsrLenSum + lenSum[int(x)]; tsrSumPos = tsrSumPos + x*sum[int(x)]; if (maxSum < sum[int(x)]) {maxSum = sum[int(x)]; maxPos = int(x)}} if (tsrSum >= awk_minReads && tsrLenSum/tsrSum >= awk_avgReadLength) {avgPos = tsrSumPos/tsrSum; for (x = int($3-awk_tsrSize+1); x <= int($3); x++) {sumOfSquares = sumOfSquares + ((x-avgPos)^2)*sum[int(x)]} stdevAvgPos = sqrt(sumOfSquares/tsrSum); print $1 "\t" $3-awk_tsrSize "\t" $3 "\t" $1":"$3-awk_tsrSize"-"$3 "\t" tsrSum "\t" $6 "\t" maxPos-1 "\t" maxPos "\t" maxSum "\t" avgPos "\t" maxPos-avgPos "\t" stdevAvgPos} tsrSum = 0; tsrLenSum = 0; tsrSumPos = 0; avgPos = 0; sumOfSquares = 0; stdevAvgPos = 0; delete sum[int($3-awk_tsrSize+1)]}' | shuf | sort --parallel $threads --buffer-size=$memorySize -k5,5nr | awk -v awk_bufferUpstream=$bufferUpstream -v awk_bufferDownstream=$bufferDownstream 'NR == 1 {print $0; for (x = int($2+1-awk_bufferDownstream); x < int($3+awk_bufferUpstream); x++) {posArray[int(x)] = int(1)}} NR > 1 {if (int($2) in posArray) {next} if (int($3) in posArray) {next} else {print $0; for (x = int($2+1-awk_bufferDownstream); x < int($3+awk_bufferUpstream); x++) {posArray[int(x)] = int(1)}}}' | sort --parallel $threads --buffer-size=$memorySize -k2,2n > ${fileRV2%.2}".3" &
+done
+wait
+
+
+#	4: Output the TSR results.
+#	BED/BB files: TSR boundaries or 1 bp wide maximum TSS, both scored by sum of overall TSR reads.
+#		Because BED $5 is capped at 1000, the score is clipped at 1000 TSR reads.
+#	BedGraph/BW files: 1 bp wide maximum TSS, scored by max TSS reads, overall TSR reads, or the standard deviation of the mean TSS position.
+#	Tab files: information about TSR boundaries, the max TSS position, the average TSS position, maxTSS-avgTSS, and the standard deviation of the mean TSS position.
+
+outBed_TSR=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength".bed"
+outBed_TSR_FW=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bed"
+outBed_TSR_RV=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bed"
+outBed_maxTSS=$prefix"-maxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength".bed"
+outBed_maxTSS_FW=$prefix"-maxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bed"
+outBed_maxTSS_RV=$prefix"-maxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bed"
+outBedGraph_maxTSS_scoredByMaxTSS_FW=$prefix"-maxTSS-scoredByMaxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bedGraph"
+outBedGraph_maxTSS_scoredByMaxTSS_RV=$prefix"-maxTSS-scoredByMaxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bedGraph"
+outBedGraph_maxTSS_scoredByTSRSum_FW=$prefix"-maxTSS-scoredByTSRSum-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bedGraph"
+outBedGraph_maxTSS_scoredByTSRSum_RV=$prefix"-maxTSS-scoredByTSRSum-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bedGraph"
+outBedGraph_maxTSS_scoredByStdevAvgTSS_FW=$prefix"-maxTSS-scoredByStdevAvgTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bedGraph"
+outBedGraph_maxTSS_scoredByStdevAvgTSS_RV=$prefix"-maxTSS-scoredByStdevAvgTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bedGraph"
+
+outBigBed_TSR=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength".bb"
+outBigBed_TSR_FW=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bb"
+outBigBed_TSR_RV=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bb"
+outBigBed_maxTSS=$prefix"-maxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength".bb"
+outBigBed_maxTSS_FW=$prefix"-maxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bb"
+outBigBed_maxTSS_RV=$prefix"-maxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bb"
+outBigWig_maxTSS_scoredByMaxTSS_FW=$prefix"-maxTSS-scoredByMaxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bw"
+outBigWig_maxTSS_scoredByMaxTSS_RV=$prefix"-maxTSS-scoredByMaxTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bw"
+outBigWig_maxTSS_scoredByTSRSum_FW=$prefix"-maxTSS-scoredByTSRSum-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bw"
+outBigWig_maxTSS_scoredByTSRSum_RV=$prefix"-maxTSS-scoredByTSRSum-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bw"
+outBigWig_maxTSS_scoredByStdevAvgTSS_FW=$prefix"-maxTSS-scoredByStdevAvgTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.bw"
+outBigWig_maxTSS_scoredByStdevAvgTSS_RV=$prefix"-maxTSS-scoredByStdevAvgTSS-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.bw"
+
+outTab_TSR=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength".tab"
+outTab_TSR_FW=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-FW.tab"
+outTab_TSR_RV=$prefix"-TSR-n"$maxReadLength"s"$tsrSize"u"$bufferUpstream"w"$bufferDownstream"d"$minReads"a"$avgReadLength"-RV.tab"
+
+cat $tmpDir/*-FW.3 $tmpDir/*-RV.3 | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n | awk 'BEGIN {print "chr" "\t" "tsrL" "\t" "tsrR" "\t" "name" "\t" "tsrReads" "\t" "str" "\t" "maxTSS-1" "\t" "maxTSS" "\t" "maxTSSReads" "\t" "avgTSS" "\t" "maxTSS-avgTSS" "\t" "stdevAvgTSS"} {print $0}' > $outTab_TSR
+cat $tmpDir/*-FW.3 | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n | awk 'BEGIN {print "chr" "\t" "tsrL" "\t" "tsrR" "\t" "name" "\t" "tsrReads" "\t" "str" "\t" "maxTSS-1" "\t" "maxTSS" "\t" "maxTSSReads" "\t" "avgTSS" "\t" "maxTSS-avgTSS" "\t" "stdevAvgTSS"} {print $0}' > $outTab_TSR_FW
+cat $tmpDir/*-RV.3 | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n | awk 'BEGIN {print "chr" "\t" "tsrL" "\t" "tsrR" "\t" "name" "\t" "tsrReads" "\t" "str" "\t" "maxTSS-1" "\t" "maxTSS" "\t" "maxTSSReads" "\t" "avgTSS" "\t" "maxTSS-avgTSS" "\t" "stdevAvgTSS"} {print $0}' > $outTab_TSR_RV
+
+cat $tmpDir/*-FW.3 $tmpDir/*-RV.3 | awk '$5 >= 1000 {print $1 "\t" $2 "\t" $3 "\t" $4 "\t" 1000 "\t" $6} $5 < 1000 {print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBed_TSR
+cat $tmpDir/*-FW.3 | awk '$5 >= 1000 {print $1 "\t" $2 "\t" $3 "\t" $4 "\t" 1000 "\t" $6} $5 < 1000 {print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBed_TSR_FW
+cat $tmpDir/*-RV.3 | awk '$5 >= 1000 {print $1 "\t" $2 "\t" $3 "\t" $4 "\t" 1000 "\t" $6} $5 < 1000 {print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBed_TSR_RV
+cat $tmpDir/*-FW.3 $tmpDir/*-RV.3 | awk '$5 >= 1000 {print $1 "\t" $7 "\t" $8 "\t" $4 "\t" 1000 "\t" $6} $5 < 1000 {print $1 "\t" $7 "\t" $8 "\t" $4 "\t" $9 "\t" $6}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBed_maxTSS
+cat $tmpDir/*-FW.3 | awk '$5 >= 1000 {print $1 "\t" $7 "\t" $8 "\t" $4 "\t" 1000 "\t" $6} $5 < 1000 {print $1 "\t" $7 "\t" $8 "\t" $4 "\t" $9 "\t" $6}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBed_maxTSS_FW
+cat $tmpDir/*-RV.3 | awk '$5 >= 1000 {print $1 "\t" $7 "\t" $8 "\t" $4 "\t" 1000 "\t" $6} $5 < 1000 {print $1 "\t" $7 "\t" $8 "\t" $4 "\t" $9 "\t" $6}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBed_maxTSS_RV
+
+cat $tmpDir/*-FW.3 | awk '{print $1 "\t" $7 "\t" $8 "\t" $9}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBedGraph_maxTSS_scoredByMaxTSS_FW
+cat $tmpDir/*-RV.3 | awk '{print $1 "\t" $7 "\t" $8 "\t" $9}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBedGraph_maxTSS_scoredByMaxTSS_RV
+cat $tmpDir/*-FW.3 | awk '{print $1 "\t" $7 "\t" $8 "\t" $5}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBedGraph_maxTSS_scoredByTSRSum_FW
+cat $tmpDir/*-RV.3 | awk '{print $1 "\t" $7 "\t" $8 "\t" $5}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBedGraph_maxTSS_scoredByTSRSum_RV
+cat $tmpDir/*-FW.3 | awk '{print $1 "\t" $7 "\t" $8 "\t" $12}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBedGraph_maxTSS_scoredByStdevAvgTSS_FW
+cat $tmpDir/*-RV.3 | awk '{print $1 "\t" $7 "\t" $8 "\t" $12}' | sort --parallel $threads --buffer-size=$memorySize -k1,1 -k2,2n > $outBedGraph_maxTSS_scoredByStdevAvgTSS_RV
+
+if command -v bedToBigBed &> /dev/null && command -v bedGraphToBigWig &> /dev/null; then
+	bedToBigBed $outBed_TSR $chromSizes $outBigBed_TSR
+	bedToBigBed $outBed_TSR_FW $chromSizes $outBigBed_TSR_FW
+	bedToBigBed $outBed_TSR_RV $chromSizes $outBigBed_TSR_RV
+	bedToBigBed $outBed_maxTSS $chromSizes $outBigBed_maxTSS
+	bedToBigBed $outBed_maxTSS_FW $chromSizes $outBigBed_maxTSS_FW
+	bedToBigBed $outBed_maxTSS_RV $chromSizes $outBigBed_maxTSS_RV
+	bedGraphToBigWig $outBedGraph_maxTSS_scoredByMaxTSS_FW $chromSizes $outBigWig_maxTSS_scoredByMaxTSS_FW
+	bedGraphToBigWig $outBedGraph_maxTSS_scoredByMaxTSS_RV $chromSizes $outBigWig_maxTSS_scoredByMaxTSS_RV
+	bedGraphToBigWig $outBedGraph_maxTSS_scoredByTSRSum_FW $chromSizes $outBigWig_maxTSS_scoredByTSRSum_FW
+	bedGraphToBigWig $outBedGraph_maxTSS_scoredByTSRSum_RV $chromSizes $outBigWig_maxTSS_scoredByTSRSum_RV
+	bedGraphToBigWig $outBedGraph_maxTSS_scoredByStdevAvgTSS_FW $chromSizes $outBigWig_maxTSS_scoredByStdevAvgTSS_FW
+	bedGraphToBigWig $outBedGraph_maxTSS_scoredByStdevAvgTSS_RV $chromSizes $outBigWig_maxTSS_scoredByStdevAvgTSS_RV
+fi
+
+rm -rf $tmpDir
+exit
