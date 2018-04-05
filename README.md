@@ -53,3 +53,13 @@ Finally, parameters are included to filter out excessively long PRO-Seq reads (-
 ### Output:
 
 Soon....
+
+## Citation:
+
+tsrFinder was developed by Kyle Nilson in the lab of David Price at the University of Iowa (https://price.lab.uiowa.edu/).
+
+It was first described in the following manuscript:
+
+```
+Soon....
+```
