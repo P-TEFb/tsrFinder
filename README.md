@@ -12,7 +12,7 @@ Default parameters are hard-coded at the beginning of the script. We recommend m
 
 ## Usage:
 
-tsrFinder is a bash script that relies on common Linux utilities, sort, awk, and the Jim Kent utilities bedToBigBed and bedGraphToBigWig (http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/). It is intended to be run from the command-line and expects the following syntax:
+tsrFinder is a bash script that relies on common Linux utilities, sort, awk, and the Jim Kent utilities [bedToBigBed](http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/) and [bedGraphToBigWig](http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/). It is intended to be run from the command-line and expects the following syntax:
 
 ```
 tsrFinder -i <mapped-fragments.bed> -c <###.chrom.sizes> [optional parameters]
