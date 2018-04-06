@@ -52,7 +52,13 @@ Finally, parameters are included to filter out excessively long PRO-Seq reads (-
 
 ### Output:
 
-Soon....
+tsrFinder outputs the boundaries of identified TSRs (of -s width) as well as the position of the maximum TSS (or maxTSS) within each TSR in bed and bigBed format. Due to limitations with the bed file format, the score field is clipped at 1000 and this output is best used for its positioning information.
+
+tsrFinder also provides information for every maxTSS in bedGraph and bigWig format. These files are scored by the number of reads in the maxTSS (scoredByMaxTSS), the number of reads within the overall TSR (scoredByTSRSum), or by the standard deviation of the maxTSS position relative to the mean TSS position within the overall TSR (scoredByStdevAvgTSS).
+
+Finally, a comprehensive tab-delimited text file is also provided. It contains information about TSR boundaries, the max TSS position, the average TSS position, maxTSS-avgTSS, and the standard deviation of the average TSS position.
+
+To make downstream data analyses easier, forward and reverse strand files are also provided separately.
 
 ## Citation:
 
