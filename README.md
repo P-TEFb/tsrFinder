@@ -8,7 +8,7 @@ This script identifies transcription start regions (TSRs) from PRO-Cap data. Eve
 
 This script accepts mapped sequencing reads in bed format and requires a chrom.sizes file (obtainable using the fetchChromSizes utility). TSR information is output in bed/bigBed and bedGraph/bigWig format for use with UCSC Genome Browser or utilities such as bedTools or deepTools. A comprehensive tab-delimited text file is also provided for manual extraction of data.
 
-Default parameters are hard-coded at the beginning of the script. I recommend manually changing threads and memorySize to match your environment. The other parameters should instead be adjusted as needed on a per-run basis. 
+Default parameters are hard-coded at the beginning of the script. We recommend manually changing threads and memorySize to match your environment. The other parameters should instead be adjusted as needed on a per-run basis.
 
 ## Usage:
 
@@ -46,7 +46,7 @@ Depending on your environment, you will likely need to change -t (the number of 
 
 The other parameter that will likely require adjustment is -d (the minimum number of reads per TSR). The stringency of this parameter is dependent on the depth of your sequencing and the amount of background signal. This script does not include a method to statistically evaluate where to set this threshold; it is instead set manually.
 
-I observe that TSRs are usually 20 bp in width and are often clustered. If you wish to select only the major TSR for a given region, -u and -w (upstream and downstream buffer zones) can be manually set. For example, if you are only interested in the best TSR within 1 kb windows, set -u and -w to 500 each. I do not recommend increasing -s (the TSR window size) to accomplish this.
+We observe that TSRs are usually 20 bp in width and are often clustered. If you wish to select only the major TSR for a given region, -u and -w (upstream and downstream buffer zones) can be manually set. For example, if you are only interested in the best TSR within 1 kb windows, set -u and -w to 500 each. We do not recommend increasing -s (the TSR window size) to accomplish this.
 
 Finally, parameters are included to filter out excessively long PRO-Seq reads (-n) and TSRs composed primarily by short fragments (-a). Because promoter proximal pausing tends to occur around 40 bp downstream of most TSS and genuine nascent transcripts are rarely shorter than 18 nt, TSRs tend to have an average read length greater than 30 nt. Setting -a to 30 tends to eliminate TSRs formed exclusively by sequencing artifacts and hard to map fragments.
 
