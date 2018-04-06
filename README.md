@@ -6,13 +6,13 @@ tsrFinder identifies transcription start regions (TSRs) from PRO-Cap data.
 
 This script identifies transcription start regions (TSRs) from PRO-Cap data. Every possible TSR window across the genome is evaluated for the sum of 5' reads (transcription start sites) and the average read length. TSRs are then sorted by total reads and are kept only if they don't overlap with any better-scoring window. For every TSR, this script also calculates the position and read depth of the maximum TSS, and the position and standard deviation of the average TSS.
 
-This script accepts mapped sequencing reads in bed format and requires a chrom.sizes file (obtainable using the fetchChromSizes utility). TSR information is output in bed/bigBed and bedGraph/bigWig format for use with UCSC Genome Browser or utilities such as bedTools or deepTools. A comprehensive tab-delimited text file is also provided for manual extraction of data.
+This script accepts mapped sequencing reads in bed format and requires a chrom.sizes file (obtainable using the fetchChromSizes utility). TSR information is output in bed/bigBed and bedGraph/bigWig format for use with UCSC Genome Browser or utilities such as [bedtools](http://bedtools.readthedocs.io/en/latest/) or [deepTools](http://deeptools.readthedocs.io/en/latest/). A comprehensive tab-delimited text file is also provided for manual extraction of data.
 
 Default parameters are hard-coded at the beginning of the script. We recommend manually changing threads and memorySize to match your environment. The other parameters should instead be adjusted as needed on a per-run basis.
 
 ## Usage:
 
-tsrFinder is a bash script that relies on common Linux utilities, awk, and the Jim Kent utilities bedToBigBed and bedGraphToBigWig (http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/). It is intended to be run from the command-line and expects the following syntax:
+tsrFinder is a bash script that relies on common Linux utilities, sort, awk, and the Jim Kent utilities bedToBigBed and bedGraphToBigWig (http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/). It is intended to be run from the command-line and expects the following syntax:
 
 ```
 tsrFinder -i <mapped-fragments.bed> -c <###.chrom.sizes> [optional parameters]
