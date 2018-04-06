@@ -62,7 +62,7 @@ To make downstream data analyses easier, forward and reverse strand files are al
 
 ## Citation:
 
-tsrFinder was developed by Kyle Nilson in the lab of David Price at the University of Iowa (https://price.lab.uiowa.edu/).
+tsrFinder was developed by Kyle Nilson (https://github.com/kylenilson) in the lab of David Price at the University of Iowa (https://price.lab.uiowa.edu/).
 
 It was first described in the following manuscript:
 
