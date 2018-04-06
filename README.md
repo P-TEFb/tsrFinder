@@ -42,7 +42,7 @@ A chromosome size file is also required to generate bigBed and bigWig output and
 -m <size>       size of memory buffer per thread [default 1G]
 ```
 
-Depending on your environment, you will likely need to change -t (the number of CPU threads) and -m (the memory buffer used for sort). Because these options are hard-coded, you will need to adjust them to match your computer. These are exclusively used for the sort utility.
+Depending on your environment, you will likely need to change -t (the number of CPU threads) and -m (the memory buffer used for sort). Because these options are hard-coded, you should adjust them to match your computer. These are exclusively used for the sort utility.
 
 The other parameter that will likely require adjustment is -d (the minimum number of reads per TSR). The stringency of this parameter is dependent on the depth of your sequencing and the amount of background signal. This script does not include a method to statistically evaluate where to set this threshold; it is instead set manually.
 
