@@ -8,7 +8,7 @@ This script identifies transcription start regions (TSRs) from PRO-Cap data. Eve
 
 This script accepts mapped sequencing reads in bed format and requires a chrom.sizes file (obtainable using the fetchChromSizes utility). TSR information is output in bed/bigBed and bedGraph/bigWig format for use with [UCSC Genome Browser](http://genome.ucsc.edu/) or utilities such as [bedtools](http://bedtools.readthedocs.io/en/latest/) or [deepTools](http://deeptools.readthedocs.io/en/latest/). A comprehensive tab-delimited text file is also provided for manual extraction of data.
 
-Default parameters are hard-coded at the beginning of the script. We recommend manually changing threads and memorySize to match your environment. The other parameters should instead be adjusted as needed on a per-run basis.
+Default parameters are hard-coded at the beginning of the script. We recommend manually changing `threads` and `memorySize` to match your environment. The other parameters should instead be adjusted as needed on a per-run basis.
 
 ## Usage:
 
@@ -25,7 +25,7 @@ tsrFinder -i <mapped-fragments.bed> -c <###.chrom.sizes> [optional parameters]
 -c <###.chrom.sizes>
 ```
 
-This script is intended to work with paired-end PRO-Cap data, where the 5' and 3' boundaries of every sequenced fragment are known, but will function as long as the full coverage of every read is represented (in other words, untruncated pileup data). The 5' position of each read is used for most calculations, but the 3' end is used to establish fragment length. Filtering is performed only on TSRs with unusually short reads, so single-end sequencing is acceptable.
+This script is intended to work with paired-end PRO-Cap data, where the 5' and 3' boundaries of every sequenced fragment are known, but will function as long as the full coverage of every read is represented (in other words, untruncated pileup data). The 5' position of each read is used for most calculations, but the 3' end is used to establish fragment length. Filtering is performed only on TSRs with unusually short reads, so single-end sequencing should be acceptable.
 
 A chromosome size file is also required to generate bigBed and bigWig output and can be generated using the Jim Kent utility fetchChromSizes (http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/).
 
