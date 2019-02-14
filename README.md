@@ -67,6 +67,8 @@ tsrFinder was developed by [Kyle Nilson](https://github.com/kylenilson) in the l
 It was first described in the following manuscript:
 
 **Nucleotide Resolution Comparison of Transcription of Human Cytomegalovirus and Host Genomes Reveals Universal Use of RNA Polymerase II Elongation Control Driven by Dissimilar Core Promoter Elements.**
+
 Mrutyunjaya Parida, Kyle A. Nilson, Ming Li, Christopher B. Ball, Harrison A. Fuchs, Christine K. Lawson, Donal S. Luse, Jeffery L. Meier, David H. Price
+
 mBio Feb 2019, 10 (1) e02047-18; `PMID: 30755505`; DOI: [10.1128/mBio.02047-18](https://doi.org/10.1128/mBio.02047-18)
 
